@@ -65,12 +65,30 @@ function generate_dummy_attributes() {
         }
     }
 
-    // Check if form submitted for deletion
-    if (isset($_POST['delete_attributes'])) {
-        global $wpdb;
-        $wpdb->query("TRUNCATE TABLE {$wpdb->prefix}woocommerce_attribute_taxonomies");
-        echo '<div class="updated"><p>All attributes deleted successfully.</p></div>';
+
+// Check if form submitted for deletion
+if (isset($_POST['delete_attributes'])) {
+    global $wpdb;
+
+    // Delete terms associated with attributes
+    $attribute_taxonomies = wc_get_attribute_taxonomies();
+    foreach ($attribute_taxonomies as $attribute_taxonomy) {
+        $taxonomy = 'pa_' . $attribute_taxonomy->attribute_name;
+        $wpdb->query("DELETE FROM {$wpdb->term_taxonomy} WHERE taxonomy = '{$taxonomy}'");
     }
+
+    // Delete all attribute taxonomies
+    $wpdb->query("TRUNCATE TABLE {$wpdb->prefix}woocommerce_attribute_taxonomies");
+
+    // Clear WooCommerce transients
+    wc_delete_product_transients();
+
+    echo '<div class="updated"><p>All attributes deleted successfully.</p></div>';
+}
+
+
+
+
 
     // Display form
     ?>
@@ -106,23 +124,38 @@ function generate_dummy_attributes() {
 
 // Function to generate variations for attribute
 function generate_variations_for_attribute($attribute) {
-    $args = array(
-        'post_type'     => 'product',
-        'post_status'   => 'publish',
-        'numberposts'   => -1
-    );
-    $products = get_posts($args);
+    $terms = get_terms(array(
+        'taxonomy' => 'pa_' . $attribute->attribute_name,
+        'hide_empty' => false,
+    ));
 
-    foreach ($products as $product) {
-        $product_id = $product->ID;
-        $product_variation = new WC_Product_Variable($product_id);
-        $variation_data = array(
-            'attributes' => array(
-                $attribute->attribute_name => ''
-            ),
-            'manage_stock' => true
-        );
-        $variation_id = $product_variation->add_variation($variation_data);
-        $product_variation->save();
+    if (!empty($terms)) {
+        foreach ($terms as $term) {
+            $term_name = $term->name;
+            $variation_data = array(
+                'attributes' => array(
+                    $attribute->attribute_name => $term_name,
+                ),
+                'manage_stock' => true,
+            );
+
+            $product_id = wp_insert_post(array(
+                'post_title' => 'Variation #' . $term->term_id . ' of Product #' . $attribute->attribute_id,
+                'post_status' => 'publish',
+                'post_type' => 'product_variation',
+                'post_parent' => 0,
+                'post_content' => '',
+            ));
+
+            if ($product_id) {
+                foreach ($variation_data['attributes'] as $key => $value) {
+                    update_post_meta($product_id, 'attribute_' . $key, $value);
+                }
+                update_post_meta($product_id, '_price', '');
+                update_post_meta($product_id, '_regular_price', '');
+                update_post_meta($product_id, '_stock_status', 'instock');
+            }
+        }
     }
 }
+
